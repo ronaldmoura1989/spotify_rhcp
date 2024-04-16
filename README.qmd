@@ -1,28 +1,29 @@
-# Spotify RHCP
-Ronald Moura
-2024-04-15
+---
+title: "Spotify RHCP"
+author: "Ronald Moura"
+date: "04-15-2024"
+#format: html
+format: markdown_github
+code-fold: true
+editor: visual
+eval: false
+---
 
 ## Load Packages
 
-<details>
-<summary>Code</summary>
+```{r}
 
-``` r
 library(httr)
 library(jsonlite)
 library(tidyverse)
 library(janitor)
 library(rstatix)
-```
 
-</details>
+```
 
 ## Retrieve Token
 
-<details>
-<summary>Code</summary>
-
-``` r
+```{r}
 #|echo: false
 
 client_id     = "ce56dc9c42a24e6f837301c1e9a943b5"
@@ -40,13 +41,11 @@ token_response <- POST(
 )
 
 access_token = content(token_response)$access_token
+
 ```
 
-</details>
-<details>
-<summary>Code</summary>
+```{r}
 
-``` r
 client_id     = "my_id"
 client_secret = "my_secret"
 
@@ -64,14 +63,10 @@ token_response <- POST(
 access_token = content(token_response)$access_token
 ```
 
-</details>
+## GET Album's List
 
-## GET Album’s List
+```{r}
 
-<details>
-<summary>Code</summary>
-
-``` r
 artist_id = "0L8ExT028jH3ddEcZwqJJ5"
 endpoint  = "https://api.spotify.com/v1/artists"
 album_url = paste0(endpoint, "/", artist_id, "/albums?market=US&limit=50") #max 50 albums
@@ -87,16 +82,13 @@ album_response = tibble(album_response$items)
 #filter only albums
 album_response = album_response |> 
   filter(album_group %in% c("album"))
+
 ```
 
-</details>
+## GET Albums' Track List
 
-## GET Albums’ Track List
+```{r}
 
-<details>
-<summary>Code</summary>
-
-``` r
 if(length(album_response$id) >= 20){ 
 
   start = c(seq(from = 1,
@@ -162,16 +154,13 @@ track_response = track_response %>%
   select(!any_of("linked_from")) %>%
   rename(track_id = id) %>%
   rename(track_name = name)
+
 ```
 
-</details>
+## GET Track's Info
 
-## GET Track’s Info
+```{r}
 
-<details>
-<summary>Code</summary>
-
-``` r
 start = c(seq(from = 1, 
     to = length(track_response$track_id), 
     by = 50))
@@ -219,16 +208,13 @@ track_info_response =
                                            collapse = ","), ")")))
 
 rm(list = ls(pattern = "tracks_info_response"))
+
 ```
 
-</details>
+## GET Track's features
 
-## GET Track’s features
+```{r}
 
-<details>
-<summary>Code</summary>
-
-``` r
  = ",") #max 100 ids
   
   endpoint  = "https://api.spotify.com/v1/audio-features?"
@@ -259,16 +245,13 @@ track_feature_response =
                                            collapse = ","), ")")))
 
 rm(list = ls(pattern = "tracks_feature_response"))
-```
 
-</details>
+```
 
 ## Consolidating Dataset
 
-<details>
-<summary>Code</summary>
+```{r}
 
-``` r
 infos1 = album_response %>%
   select(id, name, total_tracks, release_date, 
          release_date_precision, album_group, external_urls, images) %>%
@@ -297,20 +280,15 @@ rhcp = infos1 %>%
   left_join(., infos3, by = "track_id") %>%
   left_join(., infos4, by = "track_id") %>%
   distinct()
-```
 
-</details>
+```
 
 ## Saving Objects
 
-<details>
-<summary>Code</summary>
+```{r}
 
-``` r
 save(rhcp, file = "./spotify_rhcp/rhcp.RData")
 save.image(file = "./spotify_rhcp/rhcp_ETL.RData")
 
 rm(client_id, client_secret, access_token)
 ```
-
-</details>
