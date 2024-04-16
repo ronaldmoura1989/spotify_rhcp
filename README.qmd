@@ -24,27 +24,6 @@ library(rstatix)
 ## Retrieve Token
 
 ```{r}
-#|echo: false
-
-client_id     = "ce56dc9c42a24e6f837301c1e9a943b5"
-client_secret = "e8ac01542a504377a367a84795e2bba3"
-
-token_url <- "https://accounts.spotify.com/api/token"
-token_response <- POST(
-  url = token_url,
-  body = list(
-    grant_type = "client_credentials",
-    client_id = client_id,
-    client_secret = client_secret
-  ),
-  encode = "form"
-)
-
-access_token = content(token_response)$access_token
-
-```
-
-```{r}
 
 client_id     = "my_id"
 client_secret = "my_secret"
