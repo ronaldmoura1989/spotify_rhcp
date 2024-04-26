@@ -10,7 +10,7 @@ Para este exercício, usaremos as bilbiotecas abaixo:
 <summary>Code</summary>
 
 ``` r
-library(httr)      #realizar consultas a bases de dados através APIs
+library(httr2)     #realizar consultas a bases de dados através APIs
 library(tidyverse) #manipulação dos dados
 ```
 
@@ -84,8 +84,9 @@ passamos como valor da variável **artist_id** no código abaixo:
 
 ``` r
 artist_id = "0L8ExT028jH3ddEcZwqJJ5"
-album_url  = "https://api.spotify.com/v1/artists"
+album_url  = "https://api.spotify.com/v1"
 album_res = request(album_url) |> 
+  req_url_path_append("artists") |> 
   req_url_path_append(artist_id) |> 
   req_url_path_append("albums") |> 
   req_url_query(market = "US",               # albuns lançados no mercado dos EUA
@@ -131,8 +132,9 @@ ter problemas com esse limite.
 <summary>Code</summary>
 
 ``` r
-tracks_url  = "https://api.spotify.com/v1/albums"
+tracks_url  = "https://api.spotify.com/v1"
 tracks_res  = request(tracks_url) |> 
+  req_url_path_append("albums") |> 
   req_url_query(ids = paste0(album_info$id, collapse = ",")) |>  #max 20 ids
   req_url_query(market = "US") |>
   req_auth_bearer_token(access_token) |> 
@@ -178,9 +180,10 @@ paralelo, através da função *req_perform_parallel()*:
 <summary>Code</summary>
 
 ``` r
-track_info_url  = "https://api.spotify.com/v1/tracks"
-track_info_res = map(track_list$id, \(x){
+track_info_url  = "https://api.spotify.com/v1"
+track_info_res = map(track_list$track_id, \(x){
     request(track_info_url) |> 
+      req_url_path_append("tracks") |> 
       req_url_query(ids = x) |> #max 100 ids
       req_url_query(market = "US") |>
       req_auth_bearer_token(access_token) |> 
@@ -215,9 +218,10 @@ em paralelo foi utilizada:
 <summary>Code</summary>
 
 ``` r
-track_detail_url  = "https://api.spotify.com/v1/audio-features"
-track_detail_res = map(track_list$id, \(x){
+track_detail_url  = "https://api.spotify.com/v1"
+track_detail_res = map(track_list$track_id, \(x){
   request(track_detail_url) |> 
+    req_url_path_append("audio-features") |> 
     req_url_query(ids = x) |>  #max 100 ids
     req_url_query(market = "US") |>
     req_auth_bearer_token(access_token) |> 
