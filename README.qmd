@@ -16,10 +16,7 @@ Para este exercício, usaremos as bilbiotecas abaixo:
 ```{r}
 
 library(httr)      #realizar consultas a bases de dados através APIs
-library(jsonlite)  #converter arquivos JSON em data frames
 library(tidyverse) #manipulação dos dados
-library(janitor)   #utilitário para auxiliar na manipulação de dados
-library(rstatix)   #análises estatísticas
 
 ```
 
@@ -29,26 +26,32 @@ O primeiro passo é adicionar a função de desenvolvedor na sua conta do spotif
 
 Ao validar sua conta para desenvolvedor, você terá acesso a um *dashboard* onde será possível registrar um app, através do botão **create app**. Basta preencher o formulário com algumas informações e a aplicação estará registrada. Isto irá fazer com que seja gerado uma **ID** e um **secret**. Essas duas informações são necessárias para gerar um token de acesso à API. Aqui, é importante copiar estas informações e não compartilha-las.
 
-Uma vez que você tem em mãos a ID e o secret, basta seguir com a geração do token diretamente pelo R:
+Uma vez que você tem em mãos a ID e o secret, é possível criar um na pasta de trabalho chamado *.venv*, onde salvamos essas informações de modo que não fiquem escritas explicitamente no código. O arquivo fica com assim:
+
+> CLIENT_ID=\<ID\>
+>
+> CLIENT_SECRET=\<SECRET\>
+
+Onde é só substituir \<ID\> e \<SECRET\> pelos valores da sua conta. não precisa colocar entre aspas, apenas os valores. A seguir, podemos prosseguir com a geração do token diretamente pelo R:
 
 ```{r}
 
-client_id     = "my_id"
-client_secret = "my_secret"
+readRenviron(".venv") 
 
 token_url = "https://accounts.spotify.com/api/token"
-token_response = POST(
-  url = token_url,
-  body = list(
-    grant_type = "client_credentials",
-    client_id = client_id,
-    client_secret = client_secret
-  ),
-  encode = "form"
-)
+token_res = request(token_url) |> 
+  req_auth_basic(username = Sys.getenv("CLIENT_ID"), 
+                 password = Sys.getenv("CLIENT_SECRET")) |> 
+  req_body_form(grant_type = "client_credentials") |> 
+  req_perform()
 
-access_token = content(token_response)$access_token
+access_token = token_res |> 
+  resp_body_json() |> 
+  pluck("access_token") 
+
 ```
+
+O objeto *access_token* irá armazenar o token gerado, que vale por 60 minutos.
 
 ## Acessar a lista dos álbuns
 
@@ -57,210 +60,119 @@ Nesta etapa, realizaremos a primeira consulta, que é para obter a lista de álb
 ```{r}
 
 artist_id = "0L8ExT028jH3ddEcZwqJJ5"
-endpoint  = "https://api.spotify.com/v1/artists"
-album_url = paste0(endpoint, "/", artist_id, "/albums?market=US&limit=50") #max 50 albums
+album_url  = "https://api.spotify.com/v1/artists"
+album_res = request(album_url) |> 
+  req_url_path_append(artist_id) |> 
+  req_url_path_append("albums") |> 
+  req_url_query(market = "US",               # albuns lançados no mercado dos EUA
+                limit  = 50,                 # limite de resultados  
+                include_groups = "album") |> # incluir apenas álbuns de estúdio
+  req_auth_bearer_token(access_token) |>     # autorização via token
+  req_perform()
 
-album_response = GET(
-  url = album_url,
-  add_headers(Authorization = paste("Bearer", access_token))
-)
-
-album_response = fromJSON(content(album_response, as = "text"))
-album_response = tibble(album_response$items)
-
-#filter only original studio albums
-album_response = album_response |> 
-  filter(album_group %in% c("album"))
+album_info = album_res |> 
+  resp_body_json() |> 
+  pluck("items") |> 
+  map_dfr(
+    \(x) {
+      tibble(id   = x |> pluck("id"),
+             name = x |> pluck("name")
+      )
+    }
+  )
 
 ```
+
+O resultado dessa requisição será um dataframe com o id e o nome de cada álbum do RHCP. Note que, na requisição, coloquei somente para receber os resultados referentes aos "álbuns de estúdio". Portanto, coletâneas e singles não serão requisitados. O limite máximo por requisição que a API impõe é de 50 álbuns. Outra opção interessante é filtrar pelo local onde o álbum foi lançado. Pode acontecer de haver um álbum exclusivo de um determinado mercado. No caso do RHCP, eu sei que todos os álbuns de estúdio sairam pelo menos nos Estados Unidos. Mais detalhes neste [link](https://developer.spotify.com/documentation/web-api/reference/get-an-artists-albums).
 
 ## Acessar a lista das músicas
 
-A partir do id dos álbuns obtidos através da consulta anterior, agora podemos passá-los como argumento para realizar uma nova busca. Desta vez, nosso objetivo é conseguir a lista das músicas (e suas ids) para cada álbum. Para esta consulta, existe um limite de 20 álbuns por vez. Deste modo, implementei uma iteração, que irá realizar a consulta para cada 20 álbuns listados, e agregar todos os resultados em um único objeto **track_response**:
+A partir do id dos álbuns obtidos através da consulta anterior, agora podemos passá-los como argumento para realizar uma nova busca. Desta vez, nosso objetivo é conseguir a lista das músicas (e suas ids) para cada álbum. Para esta consulta, existe um limite de 20 álbuns por vez. Como o Red Hot tem 17 discos de estúdio registrados até agora, não vamos ter problemas com esse limite.
 
 ```{r}
 
-if(length(album_response$id) >= 20){ 
+tracks_url  = "https://api.spotify.com/v1/albums"
+tracks_res  = request(tracks_url) |> 
+  req_url_query(ids = paste0(album_info$id, collapse = ",")) |>  #max 20 ids
+  req_url_query(market = "US") |>
+  req_auth_bearer_token(access_token) |> 
+  req_perform()
 
-  start = c(seq(from = 1,
-                 to = length(album_response$id),
-                 by = 20))
-  
-  end = c(seq(from = 20,
-               to = length(album_response$id),
-               by = 20),
-           length(album_response$id))
-  
-  parts = paste0("part", seq(1, length(start)))
-  
-  batches1 = data.frame(parts,
-                        start,
-                        end)
-} else {
-  start = 1
-  end = length(album_response$id)
-  parts = 1
-  
-  batches1 = data.frame(parts,
-                        start,
-                        end)
-}
-
-for(i in 1:nrow(batches1)) {
-
-  album_ids = paste0(album_response$id[batches1$start[i]:batches1$end[i]], 
-                     collapse = "%2C") #max 20 ids
-  endpoint  = "https://api.spotify.com/v1/albums"
-  tracks_url = paste0(endpoint, "?ids=", album_ids, "&market=US")
-  
-  assign(paste0("tracks_response",i), 
-         GET(url = tracks_url,
-             add_headers(Authorization = paste("Bearer", access_token))
-            )
-  )
-
-}
-
-for(i in ls(pattern = "tracks_response")) {
-  
-  assign(i, fromJSON(content(get(i), as = "text")))
-  assign(i, tibble(get(i)$albums))
-  
-}
-
-#put all parts together
-track_response = 
-  eval(parse(text = 
-               paste0("bind_rows(", paste0(ls(pattern = "tracks_response"), 
-                                           collapse = ","), ")")))
-
-rm(list = ls(pattern = "tracks_response"))
-
-track_response = track_response |>
-  select(tracks) |>
-  unnest(tracks, names_repair = "minimal") |>
-  mutate(album_id = str_split(href, "/", simplify = TRUE)[,6]) |>
-  select(album_id, items) |>
-  unnest(items, names_repair = "minimal") |>
-  select(!any_of("linked_from")) |>
-  rename(track_id = id) |>
-  rename(track_name = name)
+track_list = tracks_res |> 
+  resp_body_json() |> 
+  pluck(1) |> 
+  map_dfr(
+    \(x) {
+      tibble(album_external_urls     = x |> pluck("external_urls") |> list(),
+             album_id                = x |> pluck("id"),
+             album_images            = x |> pluck("images")        |> list(),
+             album_name              = x |> pluck("name"),
+             album_popularity        = x |> pluck("popularity"),
+             album_release_date      = x |> pluck("release_date"),
+             tracks                  = x |> pluck("tracks", "items"),
+             album_type              = x |> pluck("type"),
+             album_uri               = x |> pluck("uri")
+      )
+    }
+  ) |> 
+  unnest_wider(tracks, names_repair = "minimal") |> 
+  rename_with(~ paste0("track_",.x), !starts_with("album_"))
 
 ```
+
+O objeto final chamado de *track_list* contém mais algumas informações sobre os álbuns, e as informações sobre as faixas.
 
 ## Acessar informação básicas sobre as músicas
 
-Com os ids de cada uma das músicas listados, conseguimos obter uma busca para algumas informações básicas sobre cada canção. Aqui, na documentação, diz que a busca pode ser feita utilizando até 100 ids de músicas por vez, porém comigo só funcionou com até 50 ids. Deste modo, a implementação do passo anterior para uma iteração e depois agregação de cada parte em um único objeto foi reutilizada:
+Com os ids de cada uma das músicas listados, conseguimos obter uma busca para algumas informações básicas sobre cada canção. No total, temos 287 músicas registradas, e na documentação, diz que a busca pode ser feita utilizando até 100 ids de músicas por vez, porém comigo só funcionou com até 50 ids quando testei direto na versão web da API. Deste modo, para a implementação ser mais simples, utilizei o mode de requisição em paralelo, através da função *req_perform_parallel()*:
 
 ```{r}
 
-start = c(seq(from = 1, 
-    to = length(track_response$track_id), 
-    by = 50))
-
-end = c(seq(from = 50, 
-            to = length(track_response$track_id), 
-            by = 50), 
-        length(track_response$track_id))
-
-parts = paste0("part", seq(1, length(start)))
-
-batches2 = data.frame(parts,
-                     start,
-                     end)
-
-for(i in 1:nrow(batches2)) {
-  track_ids = paste0(track_response$track_id[batches2$start[i]:batches2$end[i]],
-                     collapse = ",") #max 100 ids but worked only with 50
+track_info_url  = "https://api.spotify.com/v1/tracks"
+track_info_res = map(track_list$id, \(x){
+    request(track_info_url) |> 
+      req_url_query(ids = x) |> #max 100 ids
+      req_url_query(market = "US") |>
+      req_auth_bearer_token(access_token) |> 
+      req_perform()
+  }) |>  
+  req_perform_parallel()
   
-  endpoint  = "https://api.spotify.com/v1/tracks?"
-  tracks_info = paste0(endpoint, "&market=US", "&ids=", track_ids)
-  
-  assign(paste0("tracks_info_response", i), 
-         GET(url = tracks_info,
-             add_headers(Authorization = paste("Bearer", access_token))
-             )
-  )
-  
-  #tracks_info_response = content(tracks_info_response)
-  assign(paste0("tracks_info_response", i),
-         content(get(paste0("tracks_info_response", i)))
-  )
-  
-}
-
-for(i in ls(pattern = "tracks_info_response")){
-  assign(i, tibble(get(i)$tracks) |> unnest_wider(col = 1))
-}
-rm(i)
-
-#put all parts together
-track_info_response = 
-  eval(parse(text = 
-               paste0("bind_rows(", paste0(ls(pattern = "tracks_info_response"), 
-                                           collapse = ","), ")")))
-
-rm(list = ls(pattern = "tracks_info_response"))
+track_info = map_df(track_info_res, resp_body_json)|> 
+  unnest_wider(tracks, names_repair = "minimal") |> 
+  select(id, popularity) |> 
+  rename_with(~ paste0("track_",.x), everything())
 
 ```
+
+A função *req_perform_parallel* executa várias requisições ao mesmo tempo, a partir de uma lista contendo as requisições, e gerando no final um objeto também do tipo lista com todas as respostas. Vale frisar que esse método funcionou bem neste caso, porém pode ser que cause problemas de muitas requisições simultâneas para a API. No final, foi criado o objeto *track_info*, com o id das músicas, que já tinha, mais uma variável chamada **popularity**, uma medidada de zero a 100 sobre o quanto a canção é popular. Mais detalhes neste [link](#0).
 
 ## Acessar informações detalhadas sobre as músicas
 
-A última consulta à base de dados do spotify foi para obter informações mais detalhadas sobre cada faixa, de cada álbum. Agora sim, nesta busca foi possível passar 100 ids por consulta, e mais uma vez a iteração foi necessária:
+A última consulta à base de dados do spotify foi para obter informações mais detalhadas sobre cada faixa, de cada álbum. E mais uma vez a busca em paralelo foi utilizada:
 
 ```{r}
 
-start = c(seq(from = 1, 
-              to = length(track_response$track_id), 
-              by = 100))
+track_detail_url  = "https://api.spotify.com/v1/audio-features"
+track_detail_res = map(track_list$id, \(x){
+  request(track_detail_url) |> 
+    req_url_query(ids = x) |>  #max 100 ids
+    req_url_query(market = "US") |>
+    req_auth_bearer_token(access_token) |> 
+    req_perform()
+}) |>  
+  req_perform_parallel()
 
-end = c(seq(from = 100, 
-            to = length(track_response$track_id), 
-            by = 100), 
-        length(track_response$track_id))
-
-parts = paste0("part", seq(1, length(start)))
-
-batches3 = data.frame(parts,
-                      start,
-                      end)
-
-
-for(i in 1:nrow(batches3)) {
-  track_ids = paste0(track_response$track_id[batches3$start[i]:batches3$end[i]],
-                     collapse = ",") #max 100 ids
-  
-  endpoint  = "https://api.spotify.com/v1/audio-features?"
-  tracks_feature = paste0(endpoint, "ids=", track_ids)
-  
-  assign(paste0("tracks_feature_response", i), 
-         GET(url = tracks_feature,
-             add_headers(Authorization = paste("Bearer", access_token))
-         )
-  )
-  
-  #tracks_feature_response = content(tracks_feature_response)
-  assign(paste0("tracks_feature_response", i),
-         content(get(paste0("tracks_feature_response", i)))
-  )
-  
-}
-
-for(i in ls(pattern = "tracks_feature_response")){
-  assign(i, tibble(get(i)$audio_features) |> unnest_wider(col = 1))
-}
-rm(i)
-
-#put all parts together
-track_feature_response = 
-  eval(parse(text = 
-               paste0("bind_rows(", paste0(ls(pattern = "tracks_feature_response"), 
-                                           collapse = ","), ")")))
-
-rm(list = ls(pattern = "tracks_feature_response"))
-
+track_detail = map_df(track_detail_res, resp_body_json) |> 
+  unnest_wider(audio_features, names_repair = "minimal") |> 
+  rename(href = track_href) |> 
+  rename_with(~ paste0("track_",.x), everything()) |> 
+  select(-c(track_duration_ms, 
+            track_href, track_type, track_uri))
 
 ```
+
+O objeto final contem diversas informações e métricas sobre as faixas, como duração, se tem conteúdo explícito, tonalidade, tempo, etc. Mais detalhes [aqui](https://developer.spotify.com/documentation/web-api/reference/get-several-audio-features).
 
 ## Consolidando o dataset
 
@@ -268,45 +180,23 @@ Após as quatro consultas, conseguimos reunir algums dados de cada uma delas em 
 
 ```{r}
 
-infos1 = album_response |>
-  select(id, name, total_tracks, release_date, 
-         release_date_precision, album_group, external_urls, images) |>
-  unnest(external_urls) |>
-  rename(album_id = id,
-         album_name = name,
-         album_url = spotify)
-
-infos2 = track_response |>
-  select(album_id, explicit, track_id, track_name, track_number)
-
-infos3 = track_info_response |>
-  rename(track_id = id,
-         track_name = name) |>
-  select(track_id, popularity, external_urls) |>
-  unnest_longer(external_urls) |>
-  rename(url_spotify = external_urls) |>
-  select(!any_of("external_urls_id"))
-
-infos4 = track_feature_response |>
-  rename(track_id = id) |>
-  relocate(track_id, .before = danceability)
-
-rhcp = infos1 |>
-  left_join(., infos2, by = "album_id") |>
-  left_join(., infos3, by = "track_id") |>
-  left_join(., infos4, by = "track_id") |>
-  distinct()
+rhcp = track_list %>% 
+  left_join(., track_info, by = "track_id") %>%
+  left_join(., track_detail, by = "track_id") %>%
+  relocate(c(album_id, album_name), .before = album_external_urls)
 
 ```
 
-## Salvando objetos
+## Salvando o objeto com o dataset
 
-Só para manter um backup, e não ter que repetir todas as buscas desnecessariamente, costumo salvar o .RData com todos os objetos criados e um outro só com o dataset.
+Só para manter um backup, e não ter que repetir todas as buscas desnecessariamente.
 
 ```{r}
 
-rm(client_id, client_secret, access_token)
+save(rhcp, file = "rhcp.RData")  
 
-save(rhcp, file = "rhcp.RData")
-save.image(file = "rhcp_ETL.RData")
 ```
+
+## Considerações finais
+
+A combinação do *tidyverse* com o pacote *httr2* faz com que um processo de ETL (*extract, transform and load*) seja bastante eficaz, especialmente a utilização de funções do pacote *purrr* para manipulação das respostas em JSON.
